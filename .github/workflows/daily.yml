@@ -14,7 +14,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install dependencies
-        run: pip install google-generativeai requests pexelsapi gtts google-api-python-client google-auth-oauthlib
+        run: pip install google-generativeai requests gtts google-api-python-client google-auth-oauthlib
       - name: Run pipeline
         env:
           GEMINI_KEY: ${{ secrets.GEMINI_KEY }}
