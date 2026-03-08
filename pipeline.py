@@ -19,7 +19,7 @@ print("🧠 Generating script with Gemini...")
 client = genai.Client(api_key=GEMINI_KEY)
 
 topic_res = client.models.generate_content(
-    model="gemini-1.5-flash-latest",
+    model="gemini-1.5-flash",
     contents=f"""
 You are a YouTube scriptwriter for a faceless {NICHE} channel.
 Return ONLY valid JSON with these fields:
