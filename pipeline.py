@@ -88,6 +88,8 @@ print("✅ thumbnail.jpg saved")
 
 # ── STEP 6: UPLOAD TO YOUTUBE ────────────────────────
 print("📤 Uploading to YouTube...")
+from google.auth.transport.requests import Request
+
 creds = Credentials(
     token=YT_TOKEN["token"],
     refresh_token=YT_TOKEN["refresh_token"],
@@ -96,6 +98,9 @@ creds = Credentials(
     client_secret=YT_TOKEN["client_secret"],
     scopes=YT_TOKEN["scopes"]
 )
+# Auto-refresh if expired
+if creds.expired or not creds.valid:
+    creds.refresh(Request())
 youtube = build("youtube", "v3", credentials=creds)
 
 body = {
