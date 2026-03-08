@@ -118,9 +118,14 @@ video_id = upload["id"]
 print(f"✅ Uploaded! https://youtube.com/watch?v={video_id}")
 
 # ── SET THUMBNAIL ─────────────────────────────────────
-youtube.thumbnails().set(
-    videoId=video_id,
-    media_body=MediaFileUpload("thumbnail.jpg")
-).execute()
-print("✅ Thumbnail set!")
+# ── SET THUMBNAIL ─────────────────────────────────────
+try:
+    youtube.thumbnails().set(
+        videoId=video_id,
+        media_body=MediaFileUpload("thumbnail.jpg")
+    ).execute()
+    print("✅ Thumbnail set!")
+except Exception as e:
+    print(f"⚠️ Thumbnail skipped (verify channel at youtube.com/verify): {e}")
+
 print(f"\n🎉 DONE — https://youtube.com/watch?v={video_id}")
