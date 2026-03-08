@@ -28,7 +28,7 @@ Return ONLY raw valid JSON, no markdown, no backticks, no explanation:
 
 r = requests.post(
     f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_KEY}",
-    json={{"contents": [{{"parts": [{{"text": prompt}}]}}]}}
+    json={"contents": [{"parts": [{"text": prompt}]}]}
 )
 r.raise_for_status()
 raw = r.json()["candidates"][0]["content"]["parts"][0]["text"]
