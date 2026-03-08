@@ -1,7 +1,4 @@
 import os, json, requests, subprocess, urllib.parse
-from pathlib import Path
-# NEW
-from google import genai
 from gtts import gTTS
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -15,14 +12,9 @@ YT_TOKEN = json.loads(os.environ["YOUTUBE_TOKEN"])
 
 # ── STEP 1: GENERATE SCRIPT + METADATA ──────────────
 print("🧠 Generating script with Gemini...")
-# NEW
-client = genai.Client(api_key=GEMINI_KEY)
 
-topic_res = client.models.generate_content(
-    model="gemini-1.5-flash",
-    contents=f"""
-You are a YouTube scriptwriter for a faceless {NICHE} channel.
-Return ONLY valid JSON with these fields:
+prompt = f"""You are a YouTube scriptwriter for a faceless {NICHE} channel.
+Return ONLY raw valid JSON, no markdown, no backticks, no explanation:
 {{
   "title": "catchy SEO title under 60 chars",
   "description": "150 word YouTube description with hashtags",
@@ -30,10 +22,16 @@ Return ONLY valid JSON with these fields:
   "script": "Full 700 word voiceover script, conversational tone, no headers",
   "thumbnail_prompt": "YouTube thumbnail: bold white text saying the title, dark dramatic background, high contrast, photorealistic",
   "broll": ["search term 1","search term 2","search term 3","search term 4","search term 5"]
-}}
-""")
+}}"""
 
-data = json.loads(topic_res.text.strip().replace("```json","").replace("```",""))
+r = requests.post(
+    f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key={GEMINI_KEY}",
+    json={"contents": [{"parts": [{"text": prompt}]}]}
+)
+r.raise_for_status()
+raw = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+raw = raw.strip().replace("```json","").replace("```","").strip()
+data = json.loads(raw)
 print(f"✅ Title: {data['title']}")
 
 # ── STEP 2: GENERATE VOICEOVER ───────────────────────
@@ -62,6 +60,9 @@ for term in data["broll"]:
         clips.append(clip_path)
         print(f"  ✅ Downloaded: {term}")
 
+if not clips:
+    raise Exception("No Pexels clips downloaded — check your PEXELS_KEY secret")
+
 # ── STEP 4: RENDER VIDEO WITH FFMPEG ────────────────
 print("⚙️ Rendering video with FFmpeg...")
 with open("clips.txt", "w") as f:
@@ -78,8 +79,8 @@ print("✅ final_video.mp4 rendered")
 
 # ── STEP 5: GENERATE THUMBNAIL ───────────────────────
 print("🖼️ Generating thumbnail with Pollinations...")
-prompt = urllib.parse.quote(data["thumbnail_prompt"])
-thumb_url = f"https://image.pollinations.ai/prompt/{prompt}?width=1280&height=720&nologo=true"
+prompt_enc = urllib.parse.quote(data["thumbnail_prompt"])
+thumb_url = f"https://image.pollinations.ai/prompt/{prompt_enc}?width=1280&height=720&nologo=true"
 thumb = requests.get(thumb_url, timeout=60)
 with open("thumbnail.jpg", "wb") as f:
     f.write(thumb.content)
@@ -109,7 +110,7 @@ body = {
 media = MediaFileUpload("final_video.mp4", mimetype="video/mp4", resumable=True)
 upload = youtube.videos().insert(part="snippet,status", body=body, media_body=media).execute()
 video_id = upload["id"]
-print(f"✅ Video uploaded! https://youtube.com/watch?v={video_id}")
+print(f"✅ Uploaded! https://youtube.com/watch?v={video_id}")
 
 # ── SET THUMBNAIL ─────────────────────────────────────
 youtube.thumbnails().set(
