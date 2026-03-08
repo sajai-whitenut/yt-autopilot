@@ -1,6 +1,7 @@
 import os, json, requests, subprocess, urllib.parse
 from pathlib import Path
-import google.generativeai as genai
+# NEW
+from google import genai
 from gtts import gTTS
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -14,10 +15,12 @@ YT_TOKEN = json.loads(os.environ["YOUTUBE_TOKEN"])
 
 # ── STEP 1: GENERATE SCRIPT + METADATA ──────────────
 print("🧠 Generating script with Gemini...")
-genai.configure(api_key=GEMINI_KEY)
-model = genai.GenerativeModel("gemini-1.5-flash")
+# NEW
+client = genai.Client(api_key=GEMINI_KEY)
 
-topic_res = model.generate_content(f"""
+topic_res = client.models.generate_content(
+    model="gemini-2.0-flash",
+    contents=f"""
 You are a YouTube scriptwriter for a faceless {NICHE} channel.
 Return ONLY valid JSON with these fields:
 {{
