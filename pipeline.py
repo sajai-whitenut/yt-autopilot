@@ -1,4 +1,4 @@
-import os, json, requests, subprocess, urllib.parse, time, random
+import os, json, requests, subprocess, urllib.parse, time, random, re
 from gtts import gTTS
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
@@ -9,17 +9,39 @@ from googleapiclient.http import MediaFileUpload
 GEMINI_KEY  = os.environ["GEMINI_KEY"]
 PEXELS_KEY  = os.environ["PEXELS_KEY"]
 YT_TOKEN    = json.loads(os.environ["YOUTUBE_TOKEN"])
-VIDEO_COUNT = int(os.environ.get("VIDEO_COUNT", "6"))
+VIDEO_COUNT = int(os.environ.get("VIDEO_COUNT", "2"))
 
-HIGH_CPM_NICHES = [
-    "personal finance and investing",
-    "artificial intelligence and future technology",
-    "health longevity and biohacking",
-    "business and entrepreneurship",
-    "crypto and digital assets",
-    "self improvement and productivity",
-    "real estate and passive income",
-    "science and space exploration"
+# Mass audience niches — high views, average viewer, India-friendly
+MASS_NICHES = [
+    "shocking facts most people don't know",
+    "celebrity gossip and viral news India",
+    "unbelievable true stories and mysteries",
+    "motivational success stories rags to riches",
+    "did you know amazing facts science",
+    "top 10 lists countdown videos",
+    "India news shocking viral moments",
+    "conspiracy theories and hidden secrets",
+    "bizarre world records and extreme events",
+    "emotional stories that will make you cry",
+    "cricket stars life and secrets India",
+    "Bollywood celebrity secrets and news",
+    "haunted places and horror true stories",
+    "animals doing unbelievable things viral",
+    "richest people secrets and lifestyle"
+]
+
+# Title formulas that get mass clicks
+TITLE_FORMULAS = [
+    "Top 10 {topic} That Will Shock You",
+    "{number} Facts About {topic} Nobody Tells You",
+    "The Dark Truth About {topic}",
+    "Why {topic} Is Destroying India",
+    "This {topic} Will Change How You See Everything",
+    "Scientists Discovered {topic} And Nobody Noticed",
+    "The Real Reason {topic} Happened",
+    "I Can't Believe {topic} Is Real",
+    "{topic}: The Untold Story",
+    "What They Don't Want You To Know About {topic}"
 ]
 
 # ── HELPERS ──────────────────────────────────────────
@@ -39,10 +61,12 @@ def gemini(prompt, retries=3):
     raise Exception("Gemini failed after retries")
 
 def gen_image(prompt, filename, width=1280, height=720):
-    full_prompt = f"cinematic futuristic sci-fi {prompt}, dramatic lighting, ultra detailed, 8k, neon accents, dark atmosphere, no text, no watermark"
+    """Generate AI image — cinematic dramatic style for mass audience"""
+    style = "cinematic dramatic ultra realistic, vivid colors, high contrast, eye catching, photorealistic, 8k quality, no text, no watermark, no logos"
+    full_prompt = f"{prompt}, {style}"
     encoded = urllib.parse.quote(full_prompt)
     seed = random.randint(1, 99999)
-    url = f"https://image.pollinations.ai/prompt/{encoded}?width={width}&height={height}&seed={seed}&nologo=true&enhance=true"
+    url = f"https://image.pollinations.ai/prompt/{encoded}?width={width}&height={height}&seed={seed}&nologo=true&enhance=true&model=flux"
     for attempt in range(3):
         try:
             r = requests.get(url, timeout=90)
@@ -56,61 +80,81 @@ def gen_image(prompt, filename, width=1280, height=720):
     return False
 
 def image_to_clip(img_path, out_path, duration=8, effect="zoom"):
+    """Ken Burns effect — renders at 1280x720 directly, ultrafast preset"""
+    d = duration * 25  # frames
     if effect == "zoom":
-        vf = (f"zoompan=z='min(zoom+0.0015,1.5)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'"
-              f":d={duration*25}:s=1280x720:fps=25")
+        vf = (f"scale=2560:1440,"
+              f"zoompan=z='min(zoom+0.001,1.3)'"
+              f":x='iw/2-(iw/zoom/2)'"
+              f":y='ih/2-(ih/zoom/2)'"
+              f":d={d}:s=1280x720:fps=25")
     elif effect == "pan_right":
-        vf = (f"zoompan=z='1.3':x='if(gte(x,iw*0.3),iw*0.3,x+1)':y='ih/2-(ih/zoom/2)'"
-              f":d={duration*25}:s=1280x720:fps=25")
-    else:
-        vf = (f"zoompan=z='1.3':x='if(lte(x,0),0,x-1)':y='ih/2-(ih/zoom/2)'"
-              f":d={duration*25}:s=1280x720:fps=25")
+        vf = (f"scale=2560:1440,"
+              f"zoompan=z='1.25'"
+              f":x='min(iw*0.25\\,x+1)'"
+              f":y='ih/2-(ih/zoom/2)'"
+              f":d={d}:s=1280x720:fps=25")
+    elif effect == "pan_left":
+        vf = (f"scale=2560:1440,"
+              f"zoompan=z='1.25'"
+              f":x='max(0\\,x-1)'"
+              f":y='ih/2-(ih/zoom/2)'"
+              f":d={d}:s=1280x720:fps=25")
+    else:  # zoom out
+        vf = (f"scale=2560:1440,"
+              f"zoompan=z='max(1.0\\,1.3-on*0.001)'"
+              f":x='iw/2-(iw/zoom/2)'"
+              f":y='ih/2-(ih/zoom/2)'"
+              f":d={d}:s=1280x720:fps=25")
+
     subprocess.run([
         "ffmpeg", "-loop", "1", "-i", img_path,
         "-vf", vf,
-        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
         "-t", str(duration), "-pix_fmt", "yuv420p",
-        out_path, "-y"
+        "-r", "25", out_path, "-y"
     ], check=True, capture_output=True)
 
 # ── FETCH TRENDS ─────────────────────────────────────
 def fetch_trends():
     trending = []
 
-    # 1. YouTube trending
-    try:
-        r = requests.get(
-            "https://www.googleapis.com/youtube/v3/videos",
-            params={"part": "snippet", "chart": "mostPopular",
-                    "regionCode": "US", "maxResults": 20,
-                    "key": GEMINI_KEY},
-            timeout=10
-        )
-        if r.status_code == 200:
-            items = r.json().get("items", [])
-            yt_trends = [i["snippet"]["title"] for i in items[:10]]
-            trending.extend(yt_trends)
-            print(f"  ✅ YouTube trends: {len(yt_trends)} topics")
-    except Exception as e:
-        print(f"  ⚠️ YouTube trends failed: {e}")
+    # 1. YouTube trending US + India
+    for region in ["US", "IN"]:
+        try:
+            r = requests.get(
+                "https://www.googleapis.com/youtube/v3/videos",
+                params={"part": "snippet", "chart": "mostPopular",
+                        "regionCode": region, "maxResults": 15,
+                        "key": GEMINI_KEY},
+                timeout=10
+            )
+            if r.status_code == 200:
+                items = r.json().get("items", [])
+                titles = [i["snippet"]["title"] for i in items]
+                trending.extend(titles)
+                print(f"  ✅ YouTube {region} trends: {len(titles)} topics")
+        except Exception as e:
+            print(f"  ⚠️ YouTube {region} trends failed: {e}")
 
     # 2. Google Trends RSS
     try:
-        r = requests.get(
-            "https://trends.google.com/trends/trendingsearches/daily/rss?geo=US",
-            timeout=10, headers={"User-Agent": "Mozilla/5.0"}
-        )
-        if r.status_code == 200:
-            import re
-            titles = re.findall(r'<title><!\[CDATA\[(.+?)\]\]></title>', r.text)
-            google_trends = [t for t in titles if len(t) > 5][:15]
-            trending.extend(google_trends)
-            print(f"  ✅ Google trends: {len(google_trends)} topics")
+        for geo in ["US", "IN"]:
+            r = requests.get(
+                f"https://trends.google.com/trends/trendingsearches/daily/rss?geo={geo}",
+                timeout=10, headers={"User-Agent": "Mozilla/5.0"}
+            )
+            if r.status_code == 200:
+                titles = re.findall(r'<title><!\[CDATA\[(.+?)\]\]></title>', r.text)
+                google_trends = [t for t in titles if len(t) > 5][:15]
+                trending.extend(google_trends)
+                print(f"  ✅ Google trends {geo}: {len(google_trends)} topics")
+            time.sleep(1)
     except Exception as e:
         print(f"  ⚠️ Google trends failed: {e}")
 
-    # 3. Reddit hot posts
-    for sub in ["investing", "technology", "singularity"]:
+    # 3. Reddit — mass audience subs
+    for sub in ["india", "worldnews", "todayilearned", "interestingasfuck", "nextfuckinglevel"]:
         try:
             r = requests.get(
                 f"https://www.reddit.com/r/{sub}/hot.json?limit=5",
@@ -122,10 +166,10 @@ def fetch_trends():
                 trending.extend([p["data"]["title"] for p in posts])
             time.sleep(1)
         except Exception as e:
-            print(f"  ⚠️ Reddit r/{sub} failed: {e}")
+            print(f"  ⚠️ Reddit r/{sub}: {e}")
 
     print(f"  📊 Total signals: {len(trending)}")
-    return trending[:40]
+    return trending[:50]
 
 # ── AUTH YOUTUBE ─────────────────────────────────────
 print("🔐 Authenticating YouTube...")
@@ -148,29 +192,44 @@ trends = fetch_trends()
 trends_text = "\n".join(f"- {t}" for t in trends)
 
 # ── PLAN ALL VIDEOS ───────────────────────────────────
-print(f"\n🧠 Planning {VIDEO_COUNT} videos based on trends...")
-plan_prompt = f"""You are a viral YouTube channel strategist.
+print(f"\n🧠 Planning {VIDEO_COUNT} videos for mass audience...")
+plan_prompt = f"""You are a viral YouTube strategist targeting MASS AUDIENCE viewers in India.
 
-Today's trending topics across YouTube, Google Trends, and Reddit:
+Target viewer profile:
+- Average everyday person, not highly educated
+- Loves shocking facts, gossip, mysteries, top 10 lists, emotional stories
+- Watches content like: "Top 10 shocking facts", "Did you know", "The dark truth about X"
+- Age 15-35, Indian, watches YouTube in Hindi/English
+- Gets hooked by curiosity, shock, emotion, and entertainment
+
+Today's trending topics:
 {trends_text}
 
-High-CPM niches to choose from:
-{chr(10).join(f"- {n}" for n in HIGH_CPM_NICHES)}
+Mass audience niches to pick from:
+{chr(10).join(f"- {n}" for n in MASS_NICHES)}
 
-Generate exactly {VIDEO_COUNT} unique video ideas that:
-1. Ride current trends OR connect trends to high-CPM niches
-2. Have maximum click-through potential
-3. Are completely different from each other
-4. Target keywords with high advertiser value
+Title formulas that get mass clicks:
+{chr(10).join(f"- {f}" for f in TITLE_FORMULAS)}
+
+Generate exactly {VIDEO_COUNT} video ideas optimized for MAXIMUM VIEWS from average viewers.
+
+Rules for titles:
+- Use numbers when possible (Top 5, 7 Shocking, 10 Facts)
+- Use emotional trigger words: Shocking, Secret, Dark Truth, Nobody Knows, Unbelievable
+- Keep it simple — an 8th grader must understand it instantly
+- Connect to trending topics where possible
+- Under 55 characters
 
 Return ONLY a JSON array, no markdown, no backticks:
 [
   {{
-    "niche": "which high-CPM niche this targets",
-    "trend_angle": "which trend it rides",
-    "title": "viral title under 55 chars, curiosity gap or shocking claim",
-    "thumbnail_text": "4-5 words ALL CAPS no punctuation shocking",
-    "hook": "first 2 sentences of the video, extremely attention-grabbing"
+    "niche": "which mass niche this targets",
+    "trend_angle": "which trending topic it connects to",
+    "title": "SEO optimized viral title under 55 chars",
+    "search_keyword": "exact phrase people search on YouTube for this topic",
+    "thumbnail_text": "3-4 words MAX ALL CAPS shocking emotional",
+    "hook": "first 2 shocking sentences that make viewer unable to stop watching",
+    "content_style": "shocking facts / top 10 list / true story / mystery / emotional"
   }}
 ]"""
 
@@ -178,7 +237,8 @@ plan_raw = gemini(plan_prompt).replace("```json", "").replace("```", "").strip()
 video_plans = json.loads(plan_raw)
 print(f"✅ Planned {len(video_plans)} videos")
 for i, p in enumerate(video_plans):
-    print(f"  {i+1}. [{p['niche'][:25]}] {p['title']}")
+    print(f"  {i+1}. {p['title']}")
+    print(f"     🔍 Search keyword: {p['search_keyword']}")
 
 print(f"\n🎬 Starting production...")
 
@@ -187,48 +247,61 @@ success_count = 0
 for video_num in range(1, min(VIDEO_COUNT, len(video_plans)) + 1):
     plan = video_plans[video_num - 1]
     print(f"\n{'='*54}")
-    print(f"  📹 VIDEO {video_num}/{VIDEO_COUNT} — {plan['title']}")
-    print(f"  💰 Niche: {plan['niche']}")
+    print(f"  📹 VIDEO {video_num}/{VIDEO_COUNT}")
+    print(f"  🎯 {plan['title']}")
+    print(f"  🔍 Keyword: {plan['search_keyword']}")
     print(f"{'='*54}")
 
     try:
         # ── SCRIPT ──────────────────────────────────
         print("✍️  Writing script...")
-        script_prompt = f"""Write a complete YouTube video script.
-Niche: {plan['niche']}
-Title: {plan['title']}
-Trend angle: {plan['trend_angle']}
-Hook (use this to open): {plan['hook']}
+        script_prompt = f"""Write a YouTube video script for MASS AUDIENCE viewers.
 
-Requirements:
-- Exactly 1400 words
-- Conversational, no headers, flowing paragraphs
-- Hook grabs in first 10 seconds
-- Build tension and curiosity throughout
-- CTA at 60% mark and end
-- Optimized for high watch time
+Video details:
+- Title: {plan['title']}
+- Style: {plan['content_style']}
+- Hook: {plan['hook']}
+- Search keyword to rank for: {plan['search_keyword']}
+- Target: average everyday Indian viewer age 15-35
 
-Return ONLY raw JSON, no markdown, no backticks:
+Writing rules:
+- Start IMMEDIATELY with the hook — no intro, no "welcome back"
+- Write like you are talking to a friend — simple words only
+- No complex vocabulary — 6th grade reading level
+- Use SHORT sentences. Maximum 15 words per sentence.
+- Create suspense — make viewer feel they MUST keep watching
+- Use phrases like: "But wait, it gets worse...", "Here's the shocking part...", "Nobody talks about this but..."
+- Include 3 moments of shock or surprise throughout
+- Exactly 1200 words total
+- End with cliffhanger or call to action
+
+SEO rules:
+- Say the main keyword "{plan['search_keyword']}" naturally 3-4 times in script
+- Include related phrases viewers would search
+
+Also return 8 simple visual scene descriptions and metadata.
+
+Return ONLY raw JSON no markdown no backticks:
 {{
-  "script": "full 1400 word script here",
-  "description": "150 word YouTube description with hashtags",
-  "tags": ["tag1","tag2","tag3","tag4","tag5","tag6","tag7","tag8","tag9","tag10"],
+  "script": "full 1200 word script here",
+  "description": "First line: hook sentence. Then 100 words about video. Then: Watch more: [link]. Tags below. #tag1 #tag2 #tag3 #tag4 #tag5",
+  "tags": ["{plan['search_keyword']}", "shocking facts", "did you know", "top 10", "viral", "india", "unbelievable", "amazing facts", "truth revealed", "must watch"],
   "scenes": [
-    {{"prompt": "specific futuristic sci-fi scene for AI image generation", "duration": 9}},
-    {{"prompt": "...", "duration": 9}},
-    {{"prompt": "...", "duration": 9}},
-    {{"prompt": "...", "duration": 9}},
-    {{"prompt": "...", "duration": 9}},
-    {{"prompt": "...", "duration": 9}},
-    {{"prompt": "...", "duration": 9}},
-    {{"prompt": "...", "duration": 9}}
+    {{"prompt": "dramatic visual scene related to {plan['title']}, cinematic", "duration": 10}},
+    {{"prompt": "...", "duration": 10}},
+    {{"prompt": "...", "duration": 10}},
+    {{"prompt": "...", "duration": 10}},
+    {{"prompt": "...", "duration": 10}},
+    {{"prompt": "...", "duration": 10}},
+    {{"prompt": "...", "duration": 10}},
+    {{"prompt": "...", "duration": 10}}
   ],
-  "thumbnail_bg": "dramatic futuristic scene for thumbnail background no text no people"
+  "thumbnail_bg": "dramatic eye-catching scene related to {plan['title']}, no text, vivid colors, cinematic"
 }}"""
 
         script_raw = gemini(script_prompt).replace("```json", "").replace("```", "").strip()
         data = json.loads(script_raw)
-        print(f"✅ Script: {len(data['script'].split())} words")
+        print(f"✅ Script ready: {len(data['script'].split())} words")
 
         # ── VOICEOVER ────────────────────────────────
         print("🎙️  Generating voiceover...")
@@ -240,45 +313,47 @@ Return ONLY raw JSON, no markdown, no backticks:
             capture_output=True, text=True
         )
         audio_duration = float(result.stdout.strip())
-        print(f"✅ Voiceover: {audio_duration/60:.1f} min")
+        print(f"✅ Voiceover: {audio_duration/60:.1f} min ({audio_duration:.0f}s)")
 
-        # ── AI IMAGES + ANIMATE ───────────────────────
-        print("🎨  Generating AI visuals...")
+        # ── AI IMAGES ────────────────────────────────
+        print("🎨  Generating AI visuals (HD 1280x720)...")
         scenes = data["scenes"]
-        effects = ["zoom", "pan_right", "pan_left", "zoom", "pan_right", "pan_left", "zoom", "pan_right"]
+        effects = ["zoom", "pan_right", "zoom_out", "pan_left",
+                   "zoom", "pan_right", "zoom_out", "pan_left"]
         clip_files = []
 
         for idx, scene in enumerate(scenes):
-            img_file = f"scene_{idx}.jpg"
+            img_file  = f"scene_{idx}.jpg"
             clip_file = f"scene_{idx}.mp4"
-            print(f"  🖼️  Scene {idx+1}/8: {scene['prompt'][:50]}...")
-            ok = gen_image(scene["prompt"], img_file)
+            print(f"  🖼️  Scene {idx+1}/8: {scene['prompt'][:55]}...")
+            ok = gen_image(scene["prompt"], img_file, width=1280, height=720)
             if not ok:
+                # Fallback dark frame
                 subprocess.run([
                     "ffmpeg", "-f", "lavfi",
-                    "-i", "color=c=0x0a0a2e:size=1280x720:rate=25",
-                    "-t", str(scene.get("duration", 9)),
+                    "-i", "color=c=0x111111:size=1280x720:rate=25",
+                    "-t", str(scene.get("duration", 10)),
                     clip_file, "-y"
                 ], check=True, capture_output=True)
             else:
                 image_to_clip(img_file, clip_file,
-                              duration=scene.get("duration", 9),
+                              duration=scene.get("duration", 10),
                               effect=effects[idx % len(effects)])
             clip_files.append(clip_file)
-            time.sleep(2)
+            time.sleep(3)
 
-        # Fill remaining duration if audio is longer
-        total_scene_duration = sum(s.get("duration", 9) for s in scenes)
-        if audio_duration > total_scene_duration:
-            extra_needed = audio_duration - total_scene_duration
-            print(f"  ➕ Filling {extra_needed:.0f}s gap with extra scenes...")
+        # Fill remaining audio time with extra scenes
+        total_clip_duration = sum(s.get("duration", 10) for s in scenes)
+        if audio_duration > total_clip_duration:
+            extra_needed = audio_duration - total_clip_duration
+            print(f"  ➕ Need {extra_needed:.0f}s more visuals...")
             i = 0
-            while extra_needed > 0:
-                img_file = f"extra_{i}.jpg"
-                clip_file = f"extra_{i}.mp4"
-                dur = min(9, int(extra_needed) + 2)
+            while extra_needed > 2:
+                dur = min(10, int(extra_needed) + 2)
                 scene = scenes[i % len(scenes)]
-                ok = gen_image(scene["prompt"] + " alternate angle", img_file)
+                img_file  = f"extra_{i}.jpg"
+                clip_file = f"extra_{i}.mp4"
+                ok = gen_image(scene["prompt"] + " different angle", img_file, width=1280, height=720)
                 if ok:
                     image_to_clip(img_file, clip_file,
                                   duration=dur,
@@ -286,80 +361,122 @@ Return ONLY raw JSON, no markdown, no backticks:
                     clip_files.append(clip_file)
                 extra_needed -= dur
                 i += 1
-                time.sleep(2)
+                time.sleep(3)
 
-        print(f"✅ {len(clip_files)} animated scenes ready")
+        print(f"✅ {len(clip_files)} HD scenes ready")
 
         # ── RENDER VIDEO ─────────────────────────────
-        print("⚙️  Rendering final video...")
+        print("⚙️  Rendering final HD video...")
         with open("clips.txt", "w") as f:
             for cf in clip_files:
                 f.write(f"file '{cf}'\n")
 
+        # Concat clips (already 1280x720 from image_to_clip)
         subprocess.run([
             "ffmpeg", "-f", "concat", "-safe", "0", "-i", "clips.txt",
-            "-c:v", "libx264", "-preset", "fast", "-crf", "22",
+            "-c:v", "libx264", "-preset", "fast", "-crf", "20",
             "-t", str(audio_duration + 1),
+            "-pix_fmt", "yuv420p",
             "broll.mp4", "-y"
         ], check=True, capture_output=True)
 
+        # Mix with voiceover
         subprocess.run([
             "ffmpeg", "-i", "broll.mp4", "-i", "voice.mp3",
             "-map", "0:v:0", "-map", "1:a:0",
-            "-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
+            "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
             "-shortest", "final_video.mp4", "-y"
         ], check=True, capture_output=True)
-        print("✅ Video rendered")
+
+        # Verify output
+        check = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries",
+             "format=duration,size", "-of", "json", "final_video.mp4"],
+            capture_output=True, text=True
+        )
+        info = json.loads(check.stdout)
+        size_mb = int(info["format"]["size"]) / 1024 / 1024
+        vid_dur = float(info["format"]["duration"]) / 60
+        print(f"✅ Video: {vid_dur:.1f} min, {size_mb:.1f} MB, 1280x720 HD")
 
         # ── THUMBNAIL ────────────────────────────────
-        print("🖼️  Creating thumbnail...")
+        print("🖼️  Creating clickbait thumbnail...")
         gen_image(data["thumbnail_bg"], "bg.jpg", width=1280, height=720)
 
+        # Clean thumbnail text
         thumb_text = plan["thumbnail_text"].upper()
         thumb_text = ''.join(c for c in thumb_text if c.isalnum() or c == ' ').strip()
         words = thumb_text.split()
         mid = max(1, len(words) // 2)
         line1 = " ".join(words[:mid])
-        line2 = " ".join(words[mid:])
+        line2 = " ".join(words[mid:]) if len(words) > 1 else ""
         font = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 
-        drawtext = (
-            f"drawtext=text='{line1}':fontsize=94:fontcolor=#00FFFF"
-            f":x=(w-text_w)/2:y=(h/2)-115"
-            f":borderw=8:bordercolor=black@1.0:fontfile={font},"
-            f"drawtext=text='{line2}':fontsize=94:fontcolor=#FFD700"
-            f":x=(w-text_w)/2:y=(h/2)+25"
-            f":borderw=8:bordercolor=black@1.0:fontfile={font}"
-        )
+        # Clickbait thumbnail: dark overlay, red accent, bold white/yellow text
+        if line2:
+            drawtext = (
+                f"drawtext=text='{line1}'"
+                f":fontsize=100:fontcolor=white"
+                f":x=(w-text_w)/2:y=(h/2)-120"
+                f":borderw=9:bordercolor=black@1.0:fontfile={font},"
+                f"drawtext=text='{line2}'"
+                f":fontsize=100:fontcolor=#FF3C00"
+                f":x=(w-text_w)/2:y=(h/2)+20"
+                f":borderw=9:bordercolor=black@1.0:fontfile={font}"
+            )
+        else:
+            drawtext = (
+                f"drawtext=text='{line1}'"
+                f":fontsize=110:fontcolor=#FF3C00"
+                f":x=(w-text_w)/2:y=(h-text_h)/2"
+                f":borderw=9:bordercolor=black@1.0:fontfile={font}"
+            )
 
         subprocess.run([
             "ffmpeg", "-i", "bg.jpg",
-            "-vf", (f"scale=1280:720:force_original_aspect_ratio=increase,"
-                    f"crop=1280:720,"
-                    f"colorchannelmixer=rr=0.3:gg=0.3:bb=0.5,"
-                    f"{drawtext}"),
-            "-vframes", "1", "-q:v", "2", "thumbnail.jpg", "-y"
+            "-vf", (
+                f"scale=1280:720:force_original_aspect_ratio=increase,"
+                f"crop=1280:720,"
+                f"colorchannelmixer=rr=0.45:gg=0.35:bb=0.35,"
+                f"{drawtext}"
+            ),
+            "-vframes", "1", "-q:v", "1",
+            "thumbnail.jpg", "-y"
         ], check=True, capture_output=True)
         print("✅ Thumbnail ready")
 
         # ── UPLOAD ───────────────────────────────────
         print("📤  Uploading to YouTube...")
+
+        # Build SEO-optimized description
+        description = data["description"]
+
         body = {
             "snippet": {
                 "title": plan["title"],
-                "description": data["description"],
+                "description": description,
                 "tags": data["tags"],
-                "categoryId": "27"
+                "categoryId": "22",   # People & Blogs — best for mass content
+                "defaultLanguage": "en",
+                "defaultAudioLanguage": "en"
             },
-            "status": {"privacyStatus": "public"}
+            "status": {
+                "privacyStatus": "public",
+                "selfDeclaredMadeForKids": False
+            }
         }
-        media = MediaFileUpload("final_video.mp4", mimetype="video/mp4", resumable=True)
+
+        media = MediaFileUpload(
+            "final_video.mp4", mimetype="video/mp4",
+            resumable=True, chunksize=5 * 1024 * 1024
+        )
         upload = youtube.videos().insert(
             part="snippet,status", body=body, media_body=media
         ).execute()
         video_id = upload["id"]
-        print(f"✅ https://youtube.com/watch?v={video_id}")
+        print(f"✅ Uploaded! https://youtube.com/watch?v={video_id}")
 
+        # Set thumbnail
         try:
             youtube.thumbnails().set(
                 videoId=video_id,
@@ -367,24 +484,29 @@ Return ONLY raw JSON, no markdown, no backticks:
             ).execute()
             print("✅ Thumbnail set!")
         except Exception as e:
-            print(f"⚠️  Thumbnail skipped: {e}")
+            print(f"⚠️  Thumbnail skipped (verify at youtube.com/verify): {e}")
 
         success_count += 1
-        print(f"\n🎉 VIDEO {video_num} LIVE — https://youtube.com/watch?v={video_id}")
+        print(f"\n🎉 VIDEO {video_num} LIVE!")
+        print(f"   🔗 https://youtube.com/watch?v={video_id}")
+        print(f"   🎯 Keyword: {plan['search_keyword']}")
 
-        # Cleanup clips for next video
+        # ── CLEANUP ───────────────────────────────────
         for cf in clip_files:
             try: os.remove(cf)
             except: pass
         for i in range(8):
             try: os.remove(f"scene_{i}.jpg")
             except: pass
-        for i in range(20):
+        for i in range(30):
             try: os.remove(f"extra_{i}.jpg")
+            except: pass
+        for f in ["voice.mp3", "broll.mp4", "bg.jpg", "clips.txt"]:
+            try: os.remove(f)
             except: pass
 
         if video_num < VIDEO_COUNT:
-            print(f"⏳ Cooling down 60s...")
+            print(f"\n⏳ 60s cooldown before next video...")
             time.sleep(60)
 
     except Exception as e:
@@ -394,5 +516,5 @@ Return ONLY raw JSON, no markdown, no backticks:
         continue
 
 print(f"\n{'='*54}")
-print(f"✅ BATCH DONE — {success_count}/{VIDEO_COUNT} videos uploaded")
+print(f"✅ BATCH COMPLETE — {success_count}/{VIDEO_COUNT} uploaded")
 print(f"{'='*54}")
