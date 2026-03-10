@@ -253,117 +253,64 @@ for video_num in range(1, min(VIDEO_COUNT, len(video_plans)) + 1):
     print(f"{'='*54}")
 
     try:
-        # ── SCRIPT ──────────────────────────────────
+      # ── SCRIPT ──────────────────────────────────
         print("✍️  Writing script...")
-        script_prompt = f"""Write a YouTube video script for MASS AUDIENCE viewers.
 
-Video details:
-- Title: {plan['title']}
-- Style: {plan['content_style']}
-- Hook: {plan['hook']}
-- Search keyword to rank for: {plan['search_keyword']}
-- Target: average everyday Indian viewer age 15-35
+        # Step A — get script + metadata separately
+        script_prompt = f"""Write a YouTube video script for mass audience Indian viewers.
 
-Writing rules:
-- Start IMMEDIATELY with the hook — no intro, no "welcome back"
-- Write like you are talking to a friend — simple words only
-- No complex vocabulary — 6th grade reading level
-- Use SHORT sentences. Maximum 15 words per sentence.
-- Create suspense — make viewer feel they MUST keep watching
-- Use phrases like: "But wait, it gets worse...", "Here's the shocking part...", "Nobody talks about this but..."
-- Include 3 moments of shock or surprise throughout
-- Exactly 1200 words total
-- End with cliffhanger or call to action
+Title: {plan['title']}
+Style: {plan['content_style']}
+Hook: {plan['hook']}
+Search keyword to use naturally 3-4 times: {plan['search_keyword']}
 
-SEO rules:
-- Say the main keyword "{plan['search_keyword']}" naturally 3-4 times in script
-- Include related phrases viewers would search
+Rules:
+- Start immediately with the hook, no intro
+- Simple words, short sentences, 6th grade level
+- Use suspense phrases: "But wait...", "Here's the shocking part...", "Nobody talks about this..."
+- Exactly 1200 words
+- End with subscribe CTA
 
-Also return 8 simple visual scene descriptions and metadata.
-
-Return ONLY raw JSON no markdown no backticks:
+Return ONLY raw JSON, no markdown, no backticks, no extra text:
 {{
   "script": "full 1200 word script here",
-  "description": "First line: hook sentence. Then 100 words about video. Then: Watch more: [link]. Tags below. #tag1 #tag2 #tag3 #tag4 #tag5",
-  "tags": ["{plan['search_keyword']}", "shocking facts", "did you know", "top 10", "viral", "india", "unbelievable", "amazing facts", "truth revealed", "must watch"],
-  "scenes": [
-    {{"prompt": "dramatic visual scene related to {plan['title']}, cinematic", "duration": 10}},
-    {{"prompt": "...", "duration": 10}},
-    {{"prompt": "...", "duration": 10}},
-    {{"prompt": "...", "duration": 10}},
-    {{"prompt": "...", "duration": 10}},
-    {{"prompt": "...", "duration": 10}},
-    {{"prompt": "...", "duration": 10}},
-    {{"prompt": "...", "duration": 10}}
-  ],
-  "thumbnail_bg": "dramatic eye-catching scene related to {plan['title']}, no text, vivid colors, cinematic"
+  "description": "hook sentence. Then 100 words. #tag1 #tag2 #tag3 #tag4 #tag5",
+  "tags": ["{plan['search_keyword']}", "shocking facts", "did you know", "viral india", "unbelievable", "top 10", "amazing facts", "truth", "must watch", "india"]
 }}"""
 
         script_raw = gemini(script_prompt).replace("```json", "").replace("```", "").strip()
+        # Fix common JSON issues
+        script_raw = re.sub(r',\s*}', '}', script_raw)
+        script_raw = re.sub(r',\s*]', ']', script_raw)
         data = json.loads(script_raw)
         print(f"✅ Script ready: {len(data['script'].split())} words")
 
-        # ── VOICEOVER ────────────────────────────────
-        print("🎙️  Generating voiceover...")
-        tts = gTTS(text=data["script"], lang="en", slow=False)
-        tts.save("voice.mp3")
-        result = subprocess.run(
-            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-             "-of", "default=noprint_wrappers=1:nokey=1", "voice.mp3"],
-            capture_output=True, text=True
-        )
-        audio_duration = float(result.stdout.strip())
-        print(f"✅ Voiceover: {audio_duration/60:.1f} min ({audio_duration:.0f}s)")
+        # Step B — get scenes separately (avoids giant JSON failures)
+        scenes_prompt = f"""Generate 8 visual scene descriptions for a YouTube video about:
+"{plan['title']}"
 
-        # ── AI IMAGES ────────────────────────────────
-        print("🎨  Generating AI visuals (HD 1280x720)...")
-        scenes = data["scenes"]
-        effects = ["zoom", "pan_right", "zoom_out", "pan_left",
-                   "zoom", "pan_right", "zoom_out", "pan_left"]
-        clip_files = []
+Return ONLY a JSON array, no markdown, no backticks:
+[
+  {{"prompt": "dramatic cinematic scene description, vivid, emotional, related to {plan['title']}", "duration": 10}},
+  {{"prompt": "...", "duration": 10}},
+  {{"prompt": "...", "duration": 10}},
+  {{"prompt": "...", "duration": 10}},
+  {{"prompt": "...", "duration": 10}},
+  {{"prompt": "...", "duration": 10}},
+  {{"prompt": "...", "duration": 10}},
+  {{"prompt": "...", "duration": 10}}
+]"""
 
-        for idx, scene in enumerate(scenes):
-            img_file  = f"scene_{idx}.jpg"
-            clip_file = f"scene_{idx}.mp4"
-            print(f"  🖼️  Scene {idx+1}/8: {scene['prompt'][:55]}...")
-            ok = gen_image(scene["prompt"], img_file, width=1280, height=720)
-            if not ok:
-                # Fallback dark frame
-                subprocess.run([
-                    "ffmpeg", "-f", "lavfi",
-                    "-i", "color=c=0x111111:size=1280x720:rate=25",
-                    "-t", str(scene.get("duration", 10)),
-                    clip_file, "-y"
-                ], check=True, capture_output=True)
-            else:
-                image_to_clip(img_file, clip_file,
-                              duration=scene.get("duration", 10),
-                              effect=effects[idx % len(effects)])
-            clip_files.append(clip_file)
-            time.sleep(3)
+        scenes_raw = gemini(scenes_prompt).replace("```json", "").replace("```", "").strip()
+        scenes_raw = re.sub(r',\s*]', ']', scenes_raw)
+        scenes = json.loads(scenes_raw)
 
-        # Fill remaining audio time with extra scenes
-        total_clip_duration = sum(s.get("duration", 10) for s in scenes)
-        if audio_duration > total_clip_duration:
-            extra_needed = audio_duration - total_clip_duration
-            print(f"  ➕ Need {extra_needed:.0f}s more visuals...")
-            i = 0
-            while extra_needed > 2:
-                dur = min(10, int(extra_needed) + 2)
-                scene = scenes[i % len(scenes)]
-                img_file  = f"extra_{i}.jpg"
-                clip_file = f"extra_{i}.mp4"
-                ok = gen_image(scene["prompt"] + " different angle", img_file, width=1280, height=720)
-                if ok:
-                    image_to_clip(img_file, clip_file,
-                                  duration=dur,
-                                  effect=effects[i % len(effects)])
-                    clip_files.append(clip_file)
-                extra_needed -= dur
-                i += 1
-                time.sleep(3)
-
-        print(f"✅ {len(clip_files)} HD scenes ready")
+        # Thumbnail background
+        thumb_prompt = f"""Give me one image prompt for a YouTube thumbnail background for: "{plan['title']}"
+Return ONLY a plain sentence, no JSON, no quotes, no explanation."""
+        data["thumbnail_bg"] = gemini(thumb_prompt).strip().strip('"')
+        data["scenes"] = scenes
+        print(f"✅ {len(scenes)} scenes planned")
 
         # ── RENDER VIDEO ─────────────────────────────
         print("⚙️  Rendering final HD video...")
