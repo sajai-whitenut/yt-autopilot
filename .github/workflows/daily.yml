@@ -1,12 +1,15 @@
 name: Daily YouTube Upload
 on:
   schedule:
-    - cron: '0 6 * * *'
+    - cron: '0 2 * * *'
+    - cron: '0 8 * * *'
+    - cron: '0 14 * * *'
   workflow_dispatch:
 
 jobs:
   produce-and-upload:
     runs-on: ubuntu-latest
+    timeout-minutes: 340
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
@@ -22,5 +25,5 @@ jobs:
           GEMINI_KEY: ${{ secrets.GEMINI_KEY }}
           PEXELS_KEY: ${{ secrets.PEXELS_KEY }}
           YOUTUBE_TOKEN: ${{ secrets.YOUTUBE_TOKEN }}
-          NICHE: "personal finance"
+          VIDEO_COUNT: "1"
         run: python pipeline.py
